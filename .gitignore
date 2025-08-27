@@ -1,0 +1,19 @@
+# Python virtual environment
+venv/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables
+.env
+
+# SQLite database files
+*.sqlite3
+
+# MacOS system files
+.DS_Store
+
+# Logs
+*.log

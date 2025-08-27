@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Transaction Insights Dashboard</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Transaction Insights Dashboard 📊</h1>
+  </header>
+
+  <main>
+    <section aria-labelledby="input-title">
+      <h2 id="input-title">Analyze a Transaction</h2>
+      <form id="insight-form" aria-describedby="form-help">
+        <label for="time">Time</label>
+        <input type="number" id="time" placeholder="e.g., 500" required aria-required="true" />
+
+        <label for="amount">Amount</label>
+        <input type="number" id="amount" step="0.01" placeholder="e.g., 50.00" required aria-required="true" />
+
+        <label for="v1">V1</label>
+        <input type="number" id="v1" step="0.0001" placeholder="e.g., 0.1" required aria-required="true" />
+
+        <label for="v2">V2</label>
+        <input type="number" id="v2" step="0.0001" placeholder="e.g., -0.2" required aria-required="true" />
+
+        <label for="v3">V3</label>
+        <input type="number" id="v3" step="0.0001" placeholder="e.g., 0.3" required aria-required="true" />
+
+        <button id="analyze-btn" type="submit">Analyze</button>
+        <div id="result" aria-live="polite"></div>
+      </form>
+
+      <h2 id="upload-title">Upload CSV</h2>
+      <input type="file" id="csv-upload" accept=".csv" />
+      <button id="batch-btn" type="button" onclick="uploadCSV()">Analyze Batch</button>
+      <div id="batch-result" aria-live="polite"></div>
+    </section>
+
+    <section aria-labelledby="viz-title">
+      <h2 id="viz-title">Anomaly Summary</h2>
+      <canvas id="cluster-chart" aria-label="Bar chart of anomaly vs normal"></canvas>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
