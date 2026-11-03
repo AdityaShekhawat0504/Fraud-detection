@@ -1,16 +1,21 @@
-from flask import Flask, render_template, request, jsonify
-import pandas as pd
-import numpy as np
-import pickle
 import os
+import pickle
+
+import numpy as np
+import pandas as pd
+from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
-MODEL_PATH = os.path.join("models", "anomaly_model.pkl")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.environ.get(
+    "FRAUD_MODEL_PATH", os.path.join(BASE_DIR, "models", "anomaly_model.pkl")
+)
 if not os.path.exists(MODEL_PATH):
     raise FileNotFoundError(
-        "Model not found. Run `python train_model.py` after placing a CSV "
-        "with columns like Time, Amount, V1... into the data/ folder."
+        f"Model not found at {MODEL_PATH}. Run `python train_model.py` after placing "
+        "creditcard.csv in the data/ folder, or `python train_model.py --demo` to "
+        "train on synthetic data."
     )
 
 with open(MODEL_PATH, "rb") as f:

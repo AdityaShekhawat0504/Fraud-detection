@@ -1,17 +1,22 @@
-import os
-import pickle
 import argparse
 import itertools
-import pandas as pd
+import os
+import pickle
+
 import numpy as np
+import pandas as pd
 from sklearn.ensemble import IsolationForest
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
-    f1_score, precision_score, recall_score,
-    roc_auc_score, confusion_matrix, classification_report,
     average_precision_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
 )
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 
 DATA_DIR    = "data"
 MODELS_DIR  = "models"
@@ -59,6 +64,35 @@ def find_training_csv():
     return None, None, None
 
 
+def make_demo_data(n_rows=20000, fraud_rate=0.005, seed=RANDOM_SEED):
+    """
+    Synthetic stand-in for the Kaggle dataset, with the same columns
+    (Time, Amount, V1-V28, Class). Lets the app run without downloading
+    the real data. Models trained on it are for demos and tests only.
+    """
+    rng = np.random.default_rng(seed)
+    n_fraud = max(1, int(round(n_rows * fraud_rate)))
+    n_legit = n_rows - n_fraud
+
+    def block(n, v_shift, v_scale, amount_mu, amount_sigma):
+        v = rng.normal(0.0, 1.0, size=(n, 28)) * v_scale + v_shift
+        frame = pd.DataFrame(v, columns=[f"V{i}" for i in range(1, 29)])
+        frame.insert(0, "Amount", np.round(rng.lognormal(amount_mu, amount_sigma, n), 2))
+        frame.insert(0, "Time", rng.uniform(0, 172_800, n).round())
+        return frame
+
+    legit = block(n_legit, 0.0, 1.0, 3.5, 1.2)
+    fraud_shift = np.zeros(28)
+    fraud_shift[[0, 2, 3, 9, 11, 13, 16]] = [-1.5, -2.0, 1.8, -1.5, -2.0, -2.5, -1.8]
+    fraud = block(n_fraud, fraud_shift, 1.5, 4.0, 1.5)
+
+    df = pd.concat([legit, fraud], ignore_index=True)
+    labels = np.r_[np.zeros(n_legit, dtype=int), np.ones(n_fraud, dtype=int)]
+    order = rng.permutation(n_rows)
+    df = df.iloc[order].reset_index(drop=True)
+    return df[FEATURES], list(FEATURES), labels[order]
+
+
 def compute_feature_stats(df, features):
     stats = {}
     for f in features:
@@ -86,7 +120,7 @@ def phase1_model_search(X_train, X_test, y_test):
 
     print(f"\n{'='*65}")
     print(f"  PHASE 1: MODEL STRUCTURE  ({total} combos)")
-    print(f"  Metric: ROC-AUC on held-out test set  (PR-AUC saturated at 1.0)")
+    print("  Metric: ROC-AUC on held-out test set  (PR-AUC saturated at 1.0)")
     print(f"{'='*65}")
     header = f"  {'#':>3}  {'n_est':>5}  {'max_samp':>8}  {'max_feat':>8}  {'ROC-AUC':>8}  {'PR-AUC':>8}"
     print(header)
@@ -120,7 +154,7 @@ def phase1_model_search(X_train, X_test, y_test):
         print(f"  {i:>3}  {params['n_estimators']:>5}  {ms:>8}  "
               f"{params['max_features']:>8.1f}  {roc_auc:>8.4f}  {pr_auc:>8.4f}{marker}")
 
-    print(f"\n  TOP 5 BY ROC-AUC:")
+    print("\n  TOP 5 BY ROC-AUC:")
     for rank, (p, roc, pr) in enumerate(sorted(results, key=lambda r: r[1], reverse=True)[:5], 1):
         print(f"  [{rank}] n_est={p['n_estimators']:>3}  samp={str(p['max_samples']):>4}  "
               f"feat={p['max_features']:.1f}  →  ROC={roc:.4f}  PR={pr:.4f}")
@@ -185,7 +219,7 @@ def evaluate_model(model, X_scaled, labels):
     if labels is not None:
         y_true = labels.astype(int)
 
-        print(f"\n  Class distribution:")
+        print("\n  Class distribution:")
         print(f"    Legitimate (0): {(y_true == 0).sum():>7,}")
         print(f"    Fraud      (1): {(y_true == 1).sum():>7,}")
 
@@ -196,18 +230,18 @@ def evaluate_model(model, X_scaled, labels):
 
         roc_auc = roc_auc_score(y_true, scores_norm)
         pr_auc  = average_precision_score(y_true, scores_norm)
-        print(f"\n  Score-based (threshold-free) metrics:")
+        print("\n  Score-based (threshold-free) metrics:")
         print(f"    ROC-AUC   : {roc_auc:.4f}")
         print(f"    PR-AUC    : {pr_auc:.4f}  ← primary metric for imbalanced data")
 
         cm = confusion_matrix(y_true, y_pred)
         tn, fp, fn, tp = cm.ravel() if cm.size == 4 else (0, 0, 0, 0)
-        print(f"\n  Confusion Matrix:")
+        print("\n  Confusion Matrix:")
         print(f"    {'':15s}  Pred Normal  Pred Fraud")
         print(f"    True Normal  {tn:>11,}  {fp:>10,}")
         print(f"    True Fraud   {fn:>11,}  {tp:>10,}")
 
-        print(f"\n  Full Classification Report:")
+        print("\n  Full Classification Report:")
         print(classification_report(y_true, y_pred,
                                     target_names=["Legitimate", "Fraud"],
                                     zero_division=0))
@@ -220,21 +254,19 @@ def evaluate_model(model, X_scaled, labels):
     print("=" * 62 + "\n")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Train fraud detection model")
-    parser.add_argument("--tune", action="store_true",
-                        help="Run two-phase hyperparameter search before training")
-    args = parser.parse_args()
+DEFAULT_PARAMS = {
+    "n_estimators":  200,
+    "max_samples":   "auto",
+    "max_features":  1.0,
+    "contamination": 0.01,
+}
 
-    os.makedirs(DATA_DIR, exist_ok=True)
-    os.makedirs(MODELS_DIR, exist_ok=True)
 
-    df, features, labels = find_training_csv()
-    if df is None:
-        raise FileNotFoundError(
-            f"No usable CSV in {DATA_DIR}/. Place creditcard.csv there."
-        )
-
+def train(df, features, labels, tune=False, output_path=MODEL_PATH, evaluate=True):
+    """
+    Fit the scaler and IsolationForest, save the model bundle to output_path
+    and return it as (model, scaler, features, score_range, feature_stats).
+    """
     df = df.replace([np.inf, -np.inf], np.nan).dropna()
     if labels is not None:
         labels = labels[df.index]
@@ -243,7 +275,7 @@ def main():
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    if args.tune and labels is not None:
+    if tune and labels is not None:
         y = labels.astype(int)
         X_train, X_test, y_train, y_test = train_test_split(
             X_scaled, y,
@@ -265,14 +297,9 @@ def main():
         best_params = {**best_model_params, "contamination": best_cont}
 
     else:
-        if args.tune:
+        if tune:
             print("WARNING: no labels found — skipping tuning, using defaults.")
-        best_params = {
-            "n_estimators":  200,
-            "max_samples":   "auto",
-            "max_features":  1.0,
-            "contamination": 0.01,
-        }
+        best_params = dict(DEFAULT_PARAMS)
 
     # Train final model on full dataset
     print(f"Training final model on full {X_scaled.shape[0]:,}-row dataset...")
@@ -288,11 +315,48 @@ def main():
     score_range   = (float(raw_scores.min()), float(raw_scores.max()))
     feature_stats = compute_feature_stats(df, features)
 
-    with open(MODEL_PATH, "wb") as f:
-        pickle.dump((model, scaler, features, score_range, feature_stats), f)
-    print(f"  Saved → {MODEL_PATH}\n")
+    bundle = (model, scaler, features, score_range, feature_stats)
+    out_dir = os.path.dirname(output_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    with open(output_path, "wb") as f:
+        pickle.dump(bundle, f)
+    print(f"  Saved → {output_path}\n")
 
-    evaluate_model(model, X_scaled, labels)
+    if evaluate:
+        evaluate_model(model, X_scaled, labels)
+    return bundle
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Train fraud detection model")
+    parser.add_argument("--tune", action="store_true",
+                        help="Run two-phase hyperparameter search before training")
+    parser.add_argument("--demo", action="store_true",
+                        help="Train on synthetic data instead of data/creditcard.csv")
+    parser.add_argument("--output", default=MODEL_PATH,
+                        help=f"Where to write the model bundle (default: {MODEL_PATH})")
+    args = parser.parse_args()
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+    if args.demo:
+        df, features, labels = make_demo_data()
+        demo_csv = os.path.join(DATA_DIR, "demo_transactions.csv")
+        sample = df.head(200).copy()
+        sample["Class"] = labels[:200]
+        sample.to_csv(demo_csv, index=False)
+        print(f"Using {len(df):,} synthetic rows (demo mode). "
+              f"Sample CSV for batch upload → {demo_csv}")
+    else:
+        df, features, labels = find_training_csv()
+        if df is None:
+            raise FileNotFoundError(
+                f"No usable CSV in {DATA_DIR}/. Place creditcard.csv there, "
+                "or run with --demo to use synthetic data."
+            )
+
+    train(df, features, labels, tune=args.tune, output_path=args.output)
 
 
 if __name__ == "__main__":

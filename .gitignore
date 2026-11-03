@@ -19,3 +19,6 @@ __pycache__/
 *.log
 data/creditcard.csv
 models/
+data/demo_transactions.csv
+.pytest_cache/
+.ruff_cache/
