@@ -1,51 +1,80 @@
 # Fraud Detection Dashboard
 
-A Flask web application for credit card fraud detection using anomaly scoring, feature-level explainability, and batch CSV analysis — built on an IsolationForest trained against the Kaggle Credit Card Fraud dataset (284,807 transactions, 0.17% fraud rate).
+Flask app that scores credit card transactions for fraud risk with an IsolationForest, explains each verdict in plain English, and analyzes whole CSV batches.
 
----
+[![CI](https://github.com/AdityaShekhawat0504/Fraud-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/AdityaShekhawat0504/Fraud-detection/actions/workflows/ci.yml)
 
-## Overview
+## Why it matters
 
-This project goes beyond a binary fraud classifier. Each transaction is assigned a continuous **risk score (0–100)** derived directly from IsolationForest's internal anomaly scoring, with a **plain-English explanation** of which features drove the verdict. The model is trained via a two-phase hyperparameter search and achieves **ROC-AUC 0.9539** and **46% fraud recall** on the full dataset.
+Fraud is rare (0.17% of transactions in the Kaggle dataset used here) and labels arrive late, so supervised classifiers have little to learn from. An unsupervised anomaly detector can flag unusual transactions without labels. A bare "fraud / not fraud" flag is hard for an analyst to act on, so this app adds a 0–100 risk score and the features that drove it.
 
-Two interaction modes are supported:
-- **Single transaction** — enter feature values in a form, get an instant risk verdict
-- **Batch CSV** — upload a file, get per-row scores, risk levels, and a distribution chart
+## How it works
 
----
+```mermaid
+flowchart LR
+    A[creditcard.csv<br/>or --demo data] --> B[train_model.py<br/>StandardScaler + IsolationForest]
+    B -->|optional --tune| B
+    B --> C[(models/anomaly_model.pkl<br/>model, scaler, features,<br/>score range, feature stats)]
+    C --> D[app.py Flask]
+    E[Browser form / JSON] -->|POST /predict| D
+    F[CSV file] -->|POST /upload| D
+    D --> G[is_anomaly, risk_score 0-100,<br/>risk_level, reasons]
+```
 
-## How It Works
+- **Model:** scikit-learn `IsolationForest` on `Time`, `Amount` and the PCA features `V1`–`V28`, standardized with `StandardScaler`.
+- **Risk score:** `score_samples()` is mapped linearly to 0–100 using the score range seen at training time. Low < 40 ≤ Medium < 70 ≤ High.
+- **Explanations:** each feature is compared with its training mean and standard deviation. Features with |z| > 2.5 are listed as reasons, for example *"Amount ($4,832.00) is unusually high (avg: $88.35)"*.
+- **Tuning (`--tune`):** two-phase search on an 80/20 stratified split. Phase 1 picks `n_estimators`, `max_samples`, `max_features` by ROC-AUC (18 combinations). Phase 2 picks `contamination` by F1 (8 values).
 
-**Model:** [IsolationForest](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.IsolationForest.html) (scikit-learn). Anomalies are detected by measuring how quickly a point can be isolated via random recursive partitioning — fraudulent transactions isolate in fewer splits and receive higher anomaly scores.
+More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-**Risk scoring:** IsolationForest's `score_samples()` returns a raw anomaly score (more negative = more anomalous). This is linearly normalized to **0–100** using the score range observed at training time, then bucketed into Low / Medium / High at thresholds 40 and 70.
+## Results
 
-**Explainability:** At inference time, each feature is compared against per-feature mean and standard deviation stored from training. Features with |z-score| > 2.5 are surfaced as human-readable reasons (e.g., *"Amount ($4,832.00) is unusually high (avg: $88.35)"*). If no individual feature exceeds the threshold, a fallback message notes that the combination is statistically unusual.
+Measured by running `python train_model.py --tune` on the full Kaggle Credit Card Fraud dataset (284,807 transactions, 492 frauds). The metrics are printed by the script. The final model is trained on all rows and evaluated on the same rows, so treat these as in-sample numbers.
 
-**Features:** `Time`, `Amount`, `V1`–`V28` — the standard PCA-transformed features from the Kaggle dataset. All features are standardized with `StandardScaler` before inference.
+Best structure from phase 1: `n_estimators=100, max_samples=0.5, max_features=0.8` (test ROC-AUC 0.9613).
 
----
+Phase 2, contamination sweep on the test split (selection of the 8 values):
 
-## Usage
+| contamination | Precision | Recall | F1 |
+|---|---|---|---|
+| 0.001 | 0.40 | 0.24 | 0.30 |
+| 0.002 | 0.30 | 0.38 | 0.33 |
+| **0.003** | **0.27** | **0.47** | **0.34** |
+| 0.005 | 0.20 | 0.62 | 0.31 |
+| 0.010 | 0.11 | 0.73 | 0.20 |
 
-### Single Transaction
+Final model (`contamination=0.003`) on the full dataset:
 
-Open [http://localhost:5000](http://localhost:5000) and fill in `Time`, `Amount`, and any available `V1`–`V28` values. Missing V features default to 0. The response includes:
-
-| Field | Description |
+| Metric | Value |
 |---|---|
-| `is_anomaly` | Boolean fraud flag |
-| `risk_score` | 0–100 continuous risk signal |
-| `risk_level` | Low / Medium / High |
-| `reasons` | List of feature-level explanations |
+| ROC-AUC | 0.9539 |
+| Precision | 0.27 |
+| Recall | 0.46 |
+| F1 | 0.337 |
 
-### Batch CSV
+So the model catches about half of all frauds, and about one in four flagged transactions is actually fraud. The real dataset is not in this repo, and these numbers were not re-run for this README.
 
-Upload a CSV containing `Time`, `Amount`, and some or all of `V1`–`V28` (column names are case-insensitive). The app returns a results table with one row per transaction and a bar chart showing the normal vs. anomaly distribution.
+The models you get from `--demo` (below) are trained on synthetic data. Their metrics say nothing about real fraud detection.
 
-### REST API
+## Quickstart
 
-The `/predict` endpoint is also callable directly:
+Python 3.11 or 3.12.
+
+```bash
+git clone https://github.com/AdityaShekhawat0504/Fraud-detection.git
+cd Fraud-detection
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+
+python train_model.py --demo       # synthetic data, ~5 seconds
+python app.py                      # http://localhost:5000
+```
+
+`--demo` writes `models/anomaly_model.pkl` and a 200-row sample at `data/demo_transactions.csv` that you can upload in the batch section.
+
+Try the API:
 
 ```bash
 curl -X POST http://localhost:5000/predict \
@@ -53,119 +82,45 @@ curl -X POST http://localhost:5000/predict \
   -d '{"time": 0, "amount": 4832.0, "v1": -3.1, "v2": 2.4}'
 ```
 
----
+`time` and `amount` are required, missing `v1`–`v28` default to 0. The response has `is_anomaly`, `risk_score`, `risk_level` and `reasons`. `GET /health` lists the model's features.
 
-## Setup
+**Train on the real data:** download the [Kaggle Credit Card Fraud dataset](https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud), save it as `data/creditcard.csv`, then run `python train_model.py` (fixed parameters) or `python train_model.py --tune` (search, then train). Full tuning on 284k rows takes several minutes on a laptop.
 
-### 1. Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 2. Add training data
-
-Download the [Kaggle Credit Card Fraud dataset](https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud) and place it at:
-
-```
-data/creditcard.csv
-```
-
-Any CSV with columns `Time`, `Amount`, and at least some of `V1`–`V28` will work.
-
-### 3. Train the model
+**Tests and lint:**
 
 ```bash
-# Default training (fixed params)
-python train_model.py
-
-# Hyperparameter tuning — finds the best params, then trains the final model
-python train_model.py --tune
+pip install -r requirements-dev.txt
+ruff check .
+pytest
 ```
 
-This creates `models/anomaly_model.pkl` (model, scaler, feature list, score range, and feature stats).
+The tests train a small model on synthetic data, so they need no download.
 
-### 4. Run the app
+Optional setting: `FRAUD_MODEL_PATH` points the app at a different model file (see `.env.example`).
 
-```bash
-python app.py
-```
+## Tech stack
 
-Open [http://localhost:5000](http://localhost:5000) in your browser.
+Python, Flask, scikit-learn (IsolationForest, StandardScaler), pandas, NumPy, vanilla JS + Chart.js, pytest, ruff, GitHub Actions.
 
----
-
-## Hyperparameter Tuning
-
-Running `python train_model.py --tune` performs a two-phase search on an 80/20 stratified train/test split.
-
-### Phase 1 — Model Structure (18 combinations)
-
-Sweeps `n_estimators`, `max_samples`, and `max_features`, ranked by **ROC-AUC** on the held-out test set. PR-AUC is saturated at 1.0 across all combinations — the PCA-transformed features produce near-perfect anomaly score separation — so ROC-AUC is the effective discriminating metric here.
-
-| Rank | n_estimators | max_samples | max_features | ROC-AUC |
-|------|-------------|-------------|--------------|---------|
-| 1 | 100 | 0.5 | 0.8 | **0.9613** |
-| 2 | 100 | auto | 1.0 | 0.9602 |
-| 3 | 200 | 0.5 | 0.8 | 0.9583 |
-| 4 | 200 | 0.5 | 1.0 | 0.9582 |
-| 5 | 100 | 0.8 | 0.8 | 0.9580 |
-
-Smaller subsamples (`max_samples=0.5`) with reduced feature coverage (`max_features=0.8`) gave the best separation. Increasing `n_estimators` beyond 100 yielded no improvement.
-
-### Phase 2 — Contamination Sweep (8 values)
-
-With the best structure fixed, sweeps `contamination` and ranks by **F1**. This parameter sets the decision boundary (the fraction of data treated as fraud) and directly governs the precision/recall trade-off.
-
-| contamination | Precision | Recall | F1 |
-|--------------|-----------|--------|----|
-| 0.001 | 0.40 | 0.24 | 0.30 |
-| 0.002 | 0.30 | 0.38 | 0.33 |
-| **0.003** | **0.27** | **0.47** | **0.34** |
-| 0.005 | 0.20 | 0.62 | 0.31 |
-| 0.010 | 0.11 | 0.73 | 0.20 |
-
-Best: **`contamination=0.003`** — roughly 1.75× the true fraud rate (0.17%), balancing precision against recall.
-
-### Final Evaluation (full 284,807 rows)
-
-| Metric | Value |
-|--------|-------|
-| ROC-AUC | 0.9539 |
-| PR-AUC | 1.0000 |
-| F1 | 0.337 |
-| Precision | 0.27 |
-| Recall | 0.46 |
-
-The tuned model catches **46% of all frauds** vs. 22% with the default `contamination=0.01`, at the cost of a modest increase in false positives.
-
----
-
-## Project Structure
+## Project structure
 
 ```
 Fraud-detection/
-├── app.py               # Flask app: inference logic, /predict and /upload routes
-├── train_model.py       # Model training and hyperparameter tuning
-├── requirements.txt
-├── data/
-│   └── creditcard.csv   # Not tracked in git — download from Kaggle
-├── models/
-│   └── anomaly_model.pkl  # Serialized model, scaler, and feature stats
-├── static/
-│   ├── script.js
-│   └── styles.css
-└── templates/
-    └── index.html
+├── app.py                 # Flask app: scoring, explanations, /predict and /upload
+├── train_model.py         # training, --tune search, --demo synthetic data
+├── templates/index.html   # dashboard page
+├── static/                # script.js, styles.css
+├── tests/                 # pytest suite (helpers, training, routes)
+├── docs/ARCHITECTURE.md
+├── data/                  # creditcard.csv goes here (not tracked)
+└── models/                # anomaly_model.pkl is written here (not tracked)
 ```
 
----
+## Limitations and next steps
 
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Backend | Python, Flask |
-| ML | scikit-learn (IsolationForest, StandardScaler) |
-| Frontend | HTML, CSS, Vanilla JS |
-| Visualization | Chart.js |
+- **Low precision.** About 73% of flagged transactions are legitimate at the chosen threshold. A supervised model (for example gradient boosting on the labels) would likely do much better; IsolationForest was chosen to work without labels.
+- **Tuning uses the test split.** Both phases select on the same held-out set, and the final numbers are in-sample. A separate validation split or cross-validation would give an honest estimate.
+- **Explanations are per-feature z-scores**, not model attributions. A transaction can be flagged for a feature combination that no single z-score shows. SHAP-style attributions would be more faithful.
+- **V1–V28 are anonymized PCA features**, so reasons like "V14 is outside the normal range" are hard to act on outside this dataset.
+- **Model is a pickle** loaded at startup. Only load files you trained yourself.
+- **Dev server only.** `app.py` runs Flask's debug server; production would need a WSGI server and input size limits on `/upload`.
