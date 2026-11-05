@@ -1,0 +1,14 @@
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = ["venv", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "train_model"]
